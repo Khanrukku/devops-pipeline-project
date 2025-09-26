@@ -2,11 +2,11 @@ pipeline {
     agent any
     
     environment {
-        AWS_REGION = 'us-east-1'
+        AWS_REGION     = 'us-east-1'
         AWS_ACCOUNT_ID = '111708096083'
-        ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
-        ECS_CLUSTER = 'devops-pipeline-cluster'
-        ECS_SERVICE = 'devops-pipeline-service'
+        ECR_REPO       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
+        ECS_CLUSTER    = 'devops-pipeline-cluster'
+        ECS_SERVICE    = 'devops-pipeline-service'
         TASK_DEFINITION = 'devops-pipeline-task'
         CONTAINER_NAME = 'devops-pipeline-container'
     }
@@ -24,10 +24,8 @@ pipeline {
                 script {
                     echo 'Building Docker image...'
                     
-                    // Build image with build number tag
                     def image = docker.build("${ECR_REPO}:${BUILD_NUMBER}")
                     
-                    // Tag as latest too
                     sh "docker tag ${ECR_REPO}:${BUILD_NUMBER} ${ECR_REPO}:latest"
                     
                     echo "Built image: ${ECR_REPO}:${BUILD_NUMBER}"
@@ -47,12 +45,10 @@ pipeline {
                 script {
                     echo 'Pushing image to Amazon ECR...'
                     
-                    // Login to ECR
                     sh """
                         aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
                     """
                     
-                    // Push both tags
                     sh "docker push ${ECR_REPO}:${BUILD_NUMBER}"
                     sh "docker push ${ECR_REPO}:latest"
                     
@@ -66,30 +62,25 @@ pipeline {
                 script {
                     echo 'Deploying to Amazon ECS...'
                     
-                    // Get current task definition
                     def taskDefArn = sh(
                         script: "aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --query 'taskDefinition.taskDefinitionArn' --output text --region ${AWS_REGION}",
                         returnStdout: true
                     ).trim()
                     
-                    // Update task definition with new image
                     def newTaskDef = sh(
                         script: """
                             aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --region ${AWS_REGION} \
                                 --query 'taskDefinition' \
                                 --output json > task-def.json
                             
-                            # Update the image URI in task definition
                             python3 -c "
 import json
 with open('task-def.json', 'r') as f:
     task_def = json.load(f)
 
-# Remove unnecessary fields
 for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'placementConstraints', 'compatibilities', 'registeredAt', 'registeredBy']:
     task_def.pop(key, None)
 
-# Update image URI
 for container in task_def['containerDefinitions']:
     if container['name'] == '${CONTAINER_NAME}':
         container['image'] = '${ECR_REPO}:${BUILD_NUMBER}'
@@ -98,7 +89,6 @@ with open('updated-task-def.json', 'w') as f:
     json.dump(task_def, f, indent=2)
 "
                             
-                            # Register new task definition
                             aws ecs register-task-definition \
                                 --cli-input-json file://updated-task-def.json \
                                 --region ${AWS_REGION} \
@@ -110,7 +100,6 @@ with open('updated-task-def.json', 'w') as f:
                     
                     echo "New task definition: ${newTaskDef}"
                     
-                    // Update service with new task definition
                     sh """
                         aws ecs update-service \
                             --cluster ${ECS_CLUSTER} \
@@ -144,7 +133,6 @@ with open('updated-task-def.json', 'w') as f:
                 script {
                     echo 'Getting public IP and performing health check...'
                     
-                    // Get running tasks
                     def taskArn = sh(
                         script: """
                             aws ecs list-tasks \
@@ -157,21 +145,18 @@ with open('updated-task-def.json', 'w') as f:
                         returnStdout: true
                     ).trim()
                     
-                    // Get task's network interface
                     def networkInterfaceId = sh(
-    script: """
-        aws ecs describe-tasks \
-            --cluster ${ECS_CLUSTER} \
-            --tasks ${taskArn} \
-            --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" \
-            --output text \
-            --region ${AWS_REGION}
-    """,
-    returnStdout: true
-).trim()
-
+                        script: """
+                            aws ecs describe-tasks \
+                                --cluster ${ECS_CLUSTER} \
+                                --tasks ${taskArn} \
+                                --query 'tasks[0].attachments[0].details[?name==\`networkInterfaceId\`].value' \
+                                --output text \
+                                --region ${AWS_REGION}
+                        """,
+                        returnStdout: true
+                    ).trim()
                     
-                    // Get public IP from network interface
                     def publicIp = sh(
                         script: """
                             aws ec2 describe-network-interfaces \
@@ -187,10 +172,8 @@ with open('updated-task-def.json', 'w') as f:
                     echo "🔗 Application URL: http://${publicIp}:3000"
                     echo "💚 Health Check URL: http://${publicIp}:3000/health"
                     
-                    // Wait for container to be ready
                     sleep(30)
                     
-                    // Test health endpoint
                     timeout(time: 5, unit: 'MINUTES') {
                         waitUntil {
                             script {
@@ -217,7 +200,6 @@ with open('updated-task-def.json', 'w') as f:
             script {
                 echo 'Pipeline failed! Attempting rollback...'
                 
-                // Get previous task definition
                 def taskDefRevisions = sh(
                     script: """
                         aws ecs list-task-definitions \
