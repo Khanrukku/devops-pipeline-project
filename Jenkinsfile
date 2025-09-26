@@ -159,16 +159,17 @@ with open('updated-task-def.json', 'w') as f:
                     
                     // Get task's network interface
                     def networkInterfaceId = sh(
-                        script: """
-                            aws ecs describe-tasks \
-                                --cluster ${ECS_CLUSTER} \
-                                --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==\`networkInterfaceId\`].value' \
-                                --output text \
-                                --region ${AWS_REGION}
-                        """,
-                        returnStdout: true
-                    ).trim()
+    script: """
+        aws ecs describe-tasks \
+            --cluster ${ECS_CLUSTER} \
+            --tasks ${taskArn} \
+            --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" \
+            --output text \
+            --region ${AWS_REGION}
+    """,
+    returnStdout: true
+).trim()
+
                     
                     // Get public IP from network interface
                     def publicIp = sh(
