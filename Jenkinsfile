@@ -34,8 +34,12 @@ pipeline {
         
         stage('Run Tests') {
             steps {
-                echo 'Running application tests...'
-                sh 'npm test'
+                script {
+                    echo 'Running application tests inside container...'
+                    docker.image("${ECR_REPO}:${BUILD_NUMBER}").inside {
+                        sh 'npm test'
+                    }
+                }
             }
         }
         
@@ -43,15 +47,14 @@ pipeline {
             steps {
                 script {
                     echo 'Pushing image to Amazon ECR...'
-                    
-                    sh """
-                        aws ecr get-login-password --region ${AWS_REGION} \
-                        | docker login --username AWS --password-stdin ${ECR_REPO}
-                    """
-                    
-                    sh "docker push ${ECR_REPO}:${BUILD_NUMBER}"
-                    sh "docker push ${ECR_REPO}:latest"
-                    
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} \
+                            | docker login --username AWS --password-stdin ${ECR_REPO}
+                        """
+                        sh "docker push ${ECR_REPO}:${BUILD_NUMBER}"
+                        sh "docker push ${ECR_REPO}:latest"
+                    }
                     echo 'Image pushed successfully!'
                 }
             }
@@ -61,19 +64,19 @@ pipeline {
             steps {
                 script {
                     echo 'Deploying to Amazon ECS...'
-                    
-                    def taskDefArn = sh(
-                        script: "aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --query 'taskDefinition.taskDefinitionArn' --output text --region ${AWS_REGION}",
-                        returnStdout: true
-                    ).trim()
-                    
-                    def newTaskDef = sh(
-                        script: """
-                            aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --region ${AWS_REGION} \
-                                --query 'taskDefinition' \
-                                --output json > task-def.json
-                            
-                            python3 -c "
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                        def taskDefArn = sh(
+                            script: "aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --query 'taskDefinition.taskDefinitionArn' --output text --region ${AWS_REGION}",
+                            returnStdout: true
+                        ).trim()
+                        
+                        def newTaskDef = sh(
+                            script: """
+                                aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --region ${AWS_REGION} \
+                                    --query 'taskDefinition' \
+                                    --output json > task-def.json
+                                
+                                python3 -c "
 import json
 with open('task-def.json', 'r') as f:
     task_def = json.load(f)
@@ -88,25 +91,26 @@ for container in task_def['containerDefinitions']:
 with open('updated-task-def.json', 'w') as f:
     json.dump(task_def, f, indent=2)
 "
-                            
-                            aws ecs register-task-definition \
-                                --cli-input-json file://updated-task-def.json \
-                                --region ${AWS_REGION} \
-                                --query 'taskDefinition.taskDefinitionArn' \
-                                --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    
-                    echo "New task definition: ${newTaskDef}"
-                    
-                    sh """
-                        aws ecs update-service \
-                            --cluster ${ECS_CLUSTER} \
-                            --service ${ECS_SERVICE} \
-                            --task-definition ${newTaskDef} \
-                            --region ${AWS_REGION}
-                    """
+                                
+                                aws ecs register-task-definition \
+                                    --cli-input-json file://updated-task-def.json \
+                                    --region ${AWS_REGION} \
+                                    --query 'taskDefinition.taskDefinitionArn' \
+                                    --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        echo "New task definition: ${newTaskDef}"
+                        
+                        sh """
+                            aws ecs update-service \
+                                --cluster ${ECS_CLUSTER} \
+                                --service ${ECS_SERVICE} \
+                                --task-definition ${newTaskDef} \
+                                --region ${AWS_REGION}
+                        """
+                    }
                 }
             }
         }
@@ -115,14 +119,14 @@ with open('updated-task-def.json', 'w') as f:
             steps {
                 script {
                     echo 'Waiting for deployment to complete...'
-                    
-                    sh """
-                        aws ecs wait services-stable \
-                            --cluster ${ECS_CLUSTER} \
-                            --services ${ECS_SERVICE} \
-                            --region ${AWS_REGION}
-                    """
-                    
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                        sh """
+                            aws ecs wait services-stable \
+                                --cluster ${ECS_CLUSTER} \
+                                --services ${ECS_SERVICE} \
+                                --region ${AWS_REGION}
+                        """
+                    }
                     echo 'Deployment completed successfully!'
                 }
             }
@@ -132,64 +136,65 @@ with open('updated-task-def.json', 'w') as f:
             steps {
                 script {
                     echo 'Getting public IP and performing health check...'
-                    
-                    def taskArn = sh(
-                        script: """
-                            aws ecs list-tasks \
-                                --cluster ${ECS_CLUSTER} \
-                                --service-name ${ECS_SERVICE} \
-                                --query 'taskArns[0]' \
-                                --output text \
-                                --region ${AWS_REGION}
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    
-                    def networkInterfaceId = sh(
-                        script: """
-                            aws ecs describe-tasks \
-                                --cluster ${ECS_CLUSTER} \
-                                --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
-                                --output text \
-                                --region ${AWS_REGION}
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    
-                    def publicIp = sh(
-                        script: """
-                            aws ec2 describe-network-interfaces \
-                                --network-interface-ids ${networkInterfaceId} \
-                                --query 'NetworkInterfaces[0].Association.PublicIp' \
-                                --output text \
-                                --region ${AWS_REGION}
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    
-                    echo "🌐 Application Public IP: ${publicIp}"
-                    echo "🔗 Application URL: http://${publicIp}:3000"
-                    echo "💚 Health Check URL: http://${publicIp}:3000/health"
-                    
-                    sleep(30)
-                    
-                    timeout(time: 5, unit: 'MINUTES') {
-                        waitUntil {
-                            script {
-                                def response = sh(
-                                    script: "curl -s -o /dev/null -w '%{http_code}' http://${publicIp}:3000/health || echo '000'",
-                                    returnStdout: true
-                                ).trim()
-                                
-                                echo "Health check response: ${response}"
-                                return response == '200'
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                        def taskArn = sh(
+                            script: """
+                                aws ecs list-tasks \
+                                    --cluster ${ECS_CLUSTER} \
+                                    --service-name ${ECS_SERVICE} \
+                                    --query 'taskArns[0]' \
+                                    --output text \
+                                    --region ${AWS_REGION}
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        def networkInterfaceId = sh(
+                            script: """
+                                aws ecs describe-tasks \
+                                    --cluster ${ECS_CLUSTER} \
+                                    --tasks ${taskArn} \
+                                    --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+                                    --output text \
+                                    --region ${AWS_REGION}
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        def publicIp = sh(
+                            script: """
+                                aws ec2 describe-network-interfaces \
+                                    --network-interface-ids ${networkInterfaceId} \
+                                    --query 'NetworkInterfaces[0].Association.PublicIp' \
+                                    --output text \
+                                    --region ${AWS_REGION}
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        echo "🌐 Application Public IP: ${publicIp}"
+                        echo "🔗 Application URL: http://${publicIp}:3000"
+                        echo "💚 Health Check URL: http://${publicIp}:3000/health"
+                        
+                        sleep(30)
+                        
+                        timeout(time: 5, unit: 'MINUTES') {
+                            waitUntil {
+                                script {
+                                    def response = sh(
+                                        script: "curl -s -o /dev/null -w '%{http_code}' http://${publicIp}:3000/health || echo '000'",
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    echo "Health check response: ${response}"
+                                    return response == '200'
+                                }
                             }
                         }
+                        
+                        echo '✅ Health check passed! Application is running successfully.'
+                        echo "🎉 Access your app at: http://${publicIp}:3000"
                     }
-                    
-                    echo '✅ Health check passed! Application is running successfully.'
-                    echo "🎉 Access your app at: http://${publicIp}:3000"
                 }
             }
         }
@@ -199,34 +204,35 @@ with open('updated-task-def.json', 'w') as f:
         failure {
             script {
                 echo 'Pipeline failed! Attempting rollback...'
-                
-                def taskDefRevisions = sh(
-                    script: """
-                        aws ecs list-task-definitions \
-                            --family-prefix ${TASK_DEFINITION} \
-                            --status ACTIVE \
-                            --sort DESC \
-                            --query 'taskDefinitionArns[1]' \
-                            --output text \
-                            --region ${AWS_REGION}
-                    """,
-                    returnStdout: true
-                ).trim()
-                
-                if (taskDefRevisions && taskDefRevisions != 'None') {
-                    echo "Rolling back to: ${taskDefRevisions}"
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    def taskDefRevisions = sh(
+                        script: """
+                            aws ecs list-task-definitions \
+                                --family-prefix ${TASK_DEFINITION} \
+                                --status ACTIVE \
+                                --sort DESC \
+                                --query 'taskDefinitionArns[1]' \
+                                --output text \
+                                --region ${AWS_REGION}
+                        """,
+                        returnStdout: true
+                    ).trim()
                     
-                    sh """
-                        aws ecs update-service \
-                            --cluster ${ECS_CLUSTER} \
-                            --service ${ECS_SERVICE} \
-                            --task-definition ${taskDefRevisions} \
-                            --region ${AWS_REGION}
-                    """
-                    
-                    echo 'Rollback initiated.'
-                } else {
-                    echo 'No previous deployment found for rollback.'
+                    if (taskDefRevisions && taskDefRevisions != 'None') {
+                        echo "Rolling back to: ${taskDefRevisions}"
+                        
+                        sh """
+                            aws ecs update-service \
+                                --cluster ${ECS_CLUSTER} \
+                                --service ${ECS_SERVICE} \
+                                --task-definition ${taskDefRevisions} \
+                                --region ${AWS_REGION}
+                        """
+                        
+                        echo 'Rollback initiated.'
+                    } else {
+                        echo 'No previous deployment found for rollback.'
+                    }
                 }
             }
         }
