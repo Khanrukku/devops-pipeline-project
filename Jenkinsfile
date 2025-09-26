@@ -169,7 +169,7 @@ EOF
                             aws ecs describe-tasks \
                                 --cluster ${ECS_CLUSTER} \
                                 --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' 
+                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
                                 --output text \
                                 --region ${AWS_REGION}
                         """,
