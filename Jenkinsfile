@@ -176,13 +176,13 @@ EOF
                         error("No running tasks found for service ${ECS_SERVICE}")
                     }
                     
-                    // Get task details including network interface
+                    // Get task details including network interface - FIXED ESCAPING
                     def networkInterfaceId = sh(
                         script: """
                             aws ecs describe-tasks \
                                 --cluster ${ECS_CLUSTER} \
                                 --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+                                --query 'tasks[0].attachments[0].details[?name==\\\`networkInterfaceId\\\`].value' \
                                 --output text \
                                 --region ${AWS_REGION}
                         """,
