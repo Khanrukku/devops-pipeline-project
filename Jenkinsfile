@@ -2,11 +2,11 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION     = 'us-east-1'
-        AWS_ACCOUNT_ID = '111708096083'  // Replace with your 12-digit AWS Account ID
-        ECR_REPO       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
-        ECS_CLUSTER    = 'devops-pipeline-cluster'
-        ECS_SERVICE    = 'devops-pipeline-service'
+        AWS_REGION      = 'us-east-1'
+        AWS_ACCOUNT_ID  = '111708096083'  // Replace with your 12-digit AWS Account ID
+        ECR_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
+        ECS_CLUSTER     = 'devops-pipeline-cluster'
+        ECS_SERVICE     = 'devops-pipeline-service'
         TASK_DEFINITION = 'devops-pipeline-task'
         CONTAINER_NAME  = 'devops-pipeline-container'
     }
@@ -169,7 +169,7 @@ EOF
                             aws ecs describe-tasks \
                                 --cluster ${ECS_CLUSTER} \
                                 --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==\`networkInterfaceId\`].value' \
+                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' 
                                 --output text \
                                 --region ${AWS_REGION}
                         """,
