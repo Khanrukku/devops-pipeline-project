@@ -2,13 +2,13 @@ pipeline {
     agent any
     
     environment {
-        AWS_REGION     = 'us-east-1'
-        AWS_ACCOUNT_ID = '111708096083'
-        ECR_REPO       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
-        ECS_CLUSTER    = 'devops-pipeline-cluster'
-        ECS_SERVICE    = 'devops-pipeline-service'
+        AWS_REGION      = 'us-east-1'
+        AWS_ACCOUNT_ID  = '111708096083'
+        ECR_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
+        ECS_CLUSTER     = 'devops-pipeline-cluster'
+        ECS_SERVICE     = 'devops-pipeline-service'
         TASK_DEFINITION = 'devops-pipeline-task'
-        CONTAINER_NAME = 'devops-pipeline-container'
+        CONTAINER_NAME  = 'devops-pipeline-container'
     }
     
     stages {
@@ -25,7 +25,6 @@ pipeline {
                     echo 'Building Docker image...'
                     
                     def image = docker.build("${ECR_REPO}:${BUILD_NUMBER}")
-                    
                     sh "docker tag ${ECR_REPO}:${BUILD_NUMBER} ${ECR_REPO}:latest"
                     
                     echo "Built image: ${ECR_REPO}:${BUILD_NUMBER}"
@@ -46,7 +45,8 @@ pipeline {
                     echo 'Pushing image to Amazon ECR...'
                     
                     sh """
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_REPO}
                     """
                     
                     sh "docker push ${ECR_REPO}:${BUILD_NUMBER}"
@@ -150,7 +150,7 @@ with open('updated-task-def.json', 'w') as f:
                             aws ecs describe-tasks \
                                 --cluster ${ECS_CLUSTER} \
                                 --tasks ${taskArn} \
-                                --query 'tasks[0].attachments[0].details[?name==\`networkInterfaceId\`].value' \
+                                --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
                                 --output text \
                                 --region ${AWS_REGION}
                         """,
