@@ -5,7 +5,7 @@ const port = 3000;
 // Main page
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Hello from DevOps Pipeline!', 
+    message: 'Hello from DevOps Pipeline! v2.0!', 
     version: process.env.APP_VERSION || '1.0.0',
     timestamp: new Date().toISOString(),
     environment: 'production'

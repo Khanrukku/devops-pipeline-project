@@ -3,7 +3,7 @@ pipeline {
     
     environment {
         AWS_REGION = 'us-east-1'
-        AWS_ACCOUNT_ID = '111708096083'
+        AWS_ACCOUNT_ID = '111708096083'  // Replace with your 12-digit AWS Account ID
         ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-pipeline-app"
         ECS_CLUSTER = 'devops-pipeline-cluster'
         ECS_SERVICE = 'devops-pipeline-service'
@@ -72,33 +72,43 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     
-                    // Update task definition with new image
-                    def newTaskDef = sh(
-                        script: """
-                            aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --region ${AWS_REGION} \
-                                --query 'taskDefinition' \
-                                --output json > task-def.json
-                            
-                            # Update the image URI in task definition
-                            python3 -c "
+                    echo "Current task definition: ${taskDefArn}"
+                    
+                    // Create updated task definition JSON
+                    sh """
+                        aws ecs describe-task-definition --task-definition ${TASK_DEFINITION} --region ${AWS_REGION} --query 'taskDefinition' --output json > task-def.json
+                        
+                        # Create Python script to update task definition
+                        cat > update_task_def.py << 'EOF'
 import json
+import sys
+
 with open('task-def.json', 'r') as f:
     task_def = json.load(f)
 
-# Remove unnecessary fields
-for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'placementConstraints', 'compatibilities', 'registeredAt', 'registeredBy']:
-    task_def.pop(key, None)
+# Remove read-only fields
+fields_to_remove = ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'placementConstraints', 'compatibilities', 'registeredAt', 'registeredBy']
+for field in fields_to_remove:
+    task_def.pop(field, None)
 
 # Update image URI
 for container in task_def['containerDefinitions']:
     if container['name'] == '${CONTAINER_NAME}':
         container['image'] = '${ECR_REPO}:${BUILD_NUMBER}'
+        print(f"Updated container image to: {container['image']}")
 
 with open('updated-task-def.json', 'w') as f:
     json.dump(task_def, f, indent=2)
-"
-                            
-                            # Register new task definition
+    
+print("Task definition updated successfully")
+EOF
+                        
+                        python3 update_task_def.py
+                    """
+                    
+                    // Register new task definition
+                    def newTaskDef = sh(
+                        script: """
                             aws ecs register-task-definition \
                                 --cli-input-json file://updated-task-def.json \
                                 --region ${AWS_REGION} \
@@ -108,7 +118,7 @@ with open('updated-task-def.json', 'w') as f:
                         returnStdout: true
                     ).trim()
                     
-                    echo "New task definition: ${newTaskDef}"
+                    echo "New task definition registered: ${newTaskDef}"
                     
                     // Update service with new task definition
                     sh """
@@ -118,6 +128,8 @@ with open('updated-task-def.json', 'w') as f:
                             --task-definition ${newTaskDef} \
                             --region ${AWS_REGION}
                     """
+                    
+                    echo "Service update initiated"
                 }
             }
         }
@@ -128,6 +140,7 @@ with open('updated-task-def.json', 'w') as f:
                     echo 'Waiting for deployment to complete...'
                     
                     sh """
+                        echo "Waiting for service to become stable..."
                         aws ecs wait services-stable \
                             --cluster ${ECS_CLUSTER} \
                             --services ${ECS_SERVICE} \
@@ -157,7 +170,13 @@ with open('updated-task-def.json', 'w') as f:
                         returnStdout: true
                     ).trim()
                     
-                    // Get task's network interface
+                    echo "Task ARN: ${taskArn}"
+                    
+                    if (taskArn == "None" || taskArn == "") {
+                        error("No running tasks found for service ${ECS_SERVICE}")
+                    }
+                    
+                    // Get task details including network interface
                     def networkInterfaceId = sh(
                         script: """
                             aws ecs describe-tasks \
@@ -169,6 +188,12 @@ with open('updated-task-def.json', 'w') as f:
                         """,
                         returnStdout: true
                     ).trim()
+                    
+                    echo "Network Interface ID: ${networkInterfaceId}"
+                    
+                    if (networkInterfaceId == "None" || networkInterfaceId == "") {
+                        error("Could not find network interface for task")
+                    }
                     
                     // Get public IP from network interface
                     def publicIp = sh(
@@ -186,26 +211,48 @@ with open('updated-task-def.json', 'w') as f:
                     echo "🔗 Application URL: http://${publicIp}:3000"
                     echo "💚 Health Check URL: http://${publicIp}:3000/health"
                     
+                    if (publicIp == "None" || publicIp == "") {
+                        error("Could not retrieve public IP address")
+                    }
+                    
                     // Wait for container to be ready
-                    sleep(30)
+                    echo "Waiting 60 seconds for container to fully start..."
+                    sleep(60)
                     
                     // Test health endpoint
+                    echo "Testing health endpoint..."
                     timeout(time: 5, unit: 'MINUTES') {
                         waitUntil {
                             script {
-                                def response = sh(
-                                    script: "curl -s -o /dev/null -w '%{http_code}' http://${publicIp}:3000/health || echo '000'",
-                                    returnStdout: true
-                                ).trim()
-                                
-                                echo "Health check response: ${response}"
-                                return response == '200'
+                                try {
+                                    def response = sh(
+                                        script: "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 http://${publicIp}:3000/health || echo '000'",
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    echo "Health check response: ${response}"
+                                    
+                                    if (response == '200') {
+                                        echo "✅ Health check passed!"
+                                        return true
+                                    } else {
+                                        echo "⏳ Waiting for health check to pass..."
+                                        return false
+                                    }
+                                } catch (Exception e) {
+                                    echo "❌ Health check failed with exception: ${e.getMessage()}"
+                                    return false
+                                }
                             }
                         }
                     }
                     
                     echo '✅ Health check passed! Application is running successfully.'
                     echo "🎉 Access your app at: http://${publicIp}:3000"
+                    echo "🏥 Health check at: http://${publicIp}:3000/health"
+                    
+                    // Store the public IP for use in other stages if needed
+                    env.APPLICATION_URL = "http://${publicIp}:3000"
                 }
             }
         }
@@ -214,50 +261,63 @@ with open('updated-task-def.json', 'w') as f:
     post {
         failure {
             script {
-                echo 'Pipeline failed! Attempting rollback...'
+                echo '❌ Pipeline failed! Attempting rollback...'
                 
-                // Get previous task definition
-                def taskDefRevisions = sh(
-                    script: """
-                        aws ecs list-task-definitions \
-                            --family-prefix ${TASK_DEFINITION} \
-                            --status ACTIVE \
-                            --sort DESC \
-                            --query 'taskDefinitionArns[1]' \
-                            --output text \
-                            --region ${AWS_REGION}
-                    """,
-                    returnStdout: true
-                ).trim()
-                
-                if (taskDefRevisions && taskDefRevisions != 'None') {
-                    echo "Rolling back to: ${taskDefRevisions}"
+                try {
+                    // Get list of task definition revisions
+                    def taskDefRevisions = sh(
+                        script: """
+                            aws ecs list-task-definitions \
+                                --family-prefix ${TASK_DEFINITION} \
+                                --status ACTIVE \
+                                --sort DESC \
+                                --query 'taskDefinitionArns[1]' \
+                                --output text \
+                                --region ${AWS_REGION}
+                        """,
+                        returnStdout: true
+                    ).trim()
                     
-                    sh """
-                        aws ecs update-service \
-                            --cluster ${ECS_CLUSTER} \
-                            --service ${ECS_SERVICE} \
-                            --task-definition ${taskDefRevisions} \
-                            --region ${AWS_REGION}
-                    """
-                    
-                    echo 'Rollback initiated.'
-                } else {
-                    echo 'No previous deployment found for rollback.'
+                    if (taskDefRevisions && taskDefRevisions != 'None' && taskDefRevisions != '') {
+                        echo "🔄 Rolling back to previous version: ${taskDefRevisions}"
+                        
+                        sh """
+                            aws ecs update-service \
+                                --cluster ${ECS_CLUSTER} \
+                                --service ${ECS_SERVICE} \
+                                --task-definition ${taskDefRevisions} \
+                                --region ${AWS_REGION}
+                        """
+                        
+                        echo '✅ Rollback initiated successfully'
+                    } else {
+                        echo '⚠️  No previous deployment found for rollback'
+                    }
+                } catch (Exception e) {
+                    echo "❌ Rollback failed: ${e.getMessage()}"
                 }
             }
         }
         
         always {
-            echo 'Cleaning up Docker images...'
-            sh 'docker system prune -f'
+            script {
+                echo '🧹 Cleaning up Docker images...'
+                try {
+                    sh 'docker system prune -f'
+                } catch (Exception e) {
+                    echo "Warning: Docker cleanup failed: ${e.getMessage()}"
+                }
+            }
         }
         
         success {
             script {
                 echo '🎉 Pipeline completed successfully!'
                 echo '🚀 Your application is now live and running with zero downtime!'
-                echo '💡 The pipeline will show you the public IP address to access your app'
+                if (env.APPLICATION_URL) {
+                    echo "🌐 Application is accessible at: ${env.APPLICATION_URL}"
+                }
+                echo '✨ DevOps CI/CD Pipeline is working perfectly!'
             }
         }
     }
