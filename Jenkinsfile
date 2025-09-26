@@ -176,27 +176,32 @@ EOF
                         error("No running tasks found for service ${ECS_SERVICE}")
                     }
                     
-                    // Get task details including network interface - PYTHON APPROACH
+                    // Get task details and extract network interface using shell commands
+                    sh """
+                        aws ecs describe-tasks \
+                            --cluster ${ECS_CLUSTER} \
+                            --tasks ${taskArn} \
+                            --region ${AWS_REGION} \
+                            --output json > task_details.json
+                    """
+                    
+                    // Use Python to extract network interface ID
                     def networkInterfaceId = sh(
-                        script: """
-                            aws ecs describe-tasks \
-                                --cluster ${ECS_CLUSTER} \
-                                --tasks ${taskArn} \
-                                --region ${AWS_REGION} \
-                                --output json > task_details.json
-                            
-                            python3 -c "
+                        script: '''
+                            python3 << EOF
 import json
 with open('task_details.json', 'r') as f:
     data = json.load(f)
-    
-details = data['tasks'][0]['attachments'][0]['details']
-for detail in details:
-    if detail['name'] == 'networkInterfaceId':
-        print(detail['value'])
-        break
-"
-                        """,
+
+attachments = data['tasks'][0]['attachments']
+for attachment in attachments:
+    details = attachment.get('details', [])
+    for detail in details:
+        if detail.get('name') == 'networkInterfaceId':
+            print(detail.get('value', ''))
+            exit()
+EOF
+                        ''',
                         returnStdout: true
                     ).trim()
                     
