@@ -1,4 +1,4 @@
-Iplementing continuous integration and deployment with zero-downtime deployments and automated rollback capabilities. This project demonstrates modern DevOps practices including containerization, infrastructure automation, and cloud deployment.
+Implementing continuous integration and deployment with zero-downtime deployments and automated rollback capabilities. This project demonstrates modern DevOps practices including containerization, infrastructure automation, and cloud deployment.
 Key Achievements
 
 ✅ 70% Faster Deployments - Reduced deployment time from hours to minutes
